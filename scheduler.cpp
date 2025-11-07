@@ -1,3 +1,57 @@
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t n) : stop(false) {
+        for (size_t i = 0; i < n; i++) {
+            workers.emplace_back([this]() { workerLoop(); });
+        }
+    }
+
+    ~ThreadPool() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv.notify_all();
+        for (auto &t : workers) {
+            if (t.joinable()) t.join();
+        }
+    }
+
+    void submit(std::function<void()> func) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            tasks.push(std::move(func));
+        }
+        cv.notify_one();
+    }
+
+private:
+    void workerLoop() {
+        while (true) {
+            std::function<void()> task;
+
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                cv.wait(lock, [this]() { return stop || !tasks.empty(); });
+                if (stop && tasks.empty())
+                    return;
+
+                task = std::move(tasks.front());
+                tasks.pop();
+            }
+
+            task();
+        }
+    }
+
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::atomic<bool> stop;
+};
+
+
 class ScheduledExecutorService {
 public:
     ScheduledExecutorService(size_t schedulerThreads = 1,
